@@ -439,3 +439,69 @@ Dijalankan langsung dan hasilnya diperiksa — bukan hanya "config-nya bisa diba
 - **Limit CPU/memori (`deploy.resources`) dan perilaku reboot VPS.**
 - **Uji beban / beberapa kasir bersamaan** — penguncian nomor antrian memakai
   `pg_advisory_xact_lock`, tapi belum diuji dengan request paralel nyata.
+
+---
+
+## 12. Jalur alternatif: Vercel Services (tanpa VPS)
+
+Folder `deployment/` (Compose + Nginx + Certbot) tetap jalur **self-host**. Untuk
+menjalankan stack yang sama di Vercel, ada `vercel.json` di root repo — di sana Nginx,
+Certbot, dan Docker Compose tidak dipakai, dan PostgreSQL diganti database Marketplace.
+
+### Peta konsep
+
+| Compose | Vercel |
+|---|---|
+| service `web` | service `web` (`framework: nextjs`, zero-config) |
+| service `api` | service `api` (`runtime: container` → Dockerfile yang sama) |
+| service `db` + volume `pgdata` | database Marketplace (mis. Neon), kredensial disuntik sebagai env var |
+| Nginx (routing + TLS) | `rewrites` di top-level `vercel.json` + TLS otomatis Vercel |
+| service `api-migrate` + `depends_on` | **tidak ada padanannya** — migrasi dijalankan manual (lihat bawah) |
+| `INTERNAL_API_URL=http://api:3000` | **binding** yang menyuntik `INTERNAL_API_URL` otomatis |
+
+### Isi `vercel.json`
+
+- **`api` memakai `runtime: "container"` + `entrypoint: "Dockerfile"`**, bukan
+  `framework: "nestjs"`. Alasannya konkret: client Prisma 7 ikut sebagai berkas non-JS
+  (`query_compiler_fast_bg.*.wasm-base64.mjs`, dimuat lewat dynamic require) yang di-drop
+  oleh bundler serverless — prosesnya lalu crash di SEMUA route, dengan atau tanpa database.
+  Runtime container memakai image yang sudah terbukti jalan (dan sudah diuji `make smoke`)
+  tanpa melewati bundler. Pola ini juga yang dipakai project barbershop di mesin ini.
+- **`api` tetap publik di `/api/*`.** Itu bukan pilihan gaya: halaman antrian mengirim
+  aksi dari browser (`POST /api/queues/...`), jadi API harus bisa dijangkau klien lewat
+  domain yang sama. Yang internal adalah jalur *server-ke-server* — dan itu yang diurus binding.
+- **Binding hanya di `web` → `api`**, dengan `env: INTERNAL_API_URL` — nama yang sudah
+  dibaca `web/lib/api.ts` untuk fetch SSR. Karena itu tidak ada kode yang berubah selain
+  dokumentasi. **Jangan set `INTERNAL_API_URL` manual di Project Settings**; nilainya
+  dibuat Vercel dan mengikuti deployment (preview menunjuk preview). Bindings hanya resolve
+  saat runtime di function — bukan saat build, bukan di middleware.
+
+### Syarat di dashboard Vercel
+
+1. **Framework Preset harus `Services`** (Settings → Build and Deployment). Kalau tidak,
+   Vercel mengabaikan `services` dan kembali ke deteksi framework biasa.
+2. **Database**: Storage → Create Database → Postgres (Neon) → hubungkan ke project ini.
+   Kredensialnya disuntik otomatis; `api/src/common/database-url.ts` sudah mencoba
+   `DATABASE_URL` → `POSTGRES_PRISMA_URL` → `POSTGRES_URL` → `DIRECT_URL`.
+3. Env var opsional kalau perlu: `SHOP_TIMEZONE` (default `Asia/Jakarta`), `TZ`,
+   `CORS_ORIGIN` (kosongkan kalau semua lewat domain yang sama).
+
+### Migrasi database (wajib, sekali di awal)
+
+Vercel tidak punya padanan service `api-migrate`, jadi tidak ada yang membuat tabel sebelum
+request pertama datang. Jalankan dari komputer, memakai URL **langsung/unpooled** dari
+integrasi Neon:
+
+    cd api
+    DATABASE_URL="postgresql://…-pooler…/neondb?sslmode=require" \
+      npx prisma migrate deploy
+
+Setelah itu `GET /api/health` harus menjawab `schema: "ok"`. Kalau masih `"missing"`,
+field `hint` di respons itu menyebut persis langkah yang kurang.
+
+### Yang belum diuji di sini
+
+Build dan runtime Vercel **belum pernah dijalankan** dari repo ini (butuh akun Anda):
+yang terbukti di mesin ini adalah image container `api`/`web` berjalan di Compose, dan
+`vercel.json`-nya valid serta cocok dengan nama service dan env yang dipakai kode. Kalau
+build pertama gagal, kirimkan teks error-nya.

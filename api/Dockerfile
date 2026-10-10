@@ -94,10 +94,11 @@ COPY --chown=node:node docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh && mkdir -p /app/logs && chown -R node:node /app
 
 USER node
-EXPOSE 3000
+EXPOSE 3000 80
 
 # Izinkan user non-root mengikat port <1024 (port 80) — dipakai kalau container
-# dijalankan di platform yang menyuntik PORT=80. Docker sendiri menyetel
+# dijalankan di platform yang menyuntik PORT=80 (Vercel Services mengarahkan trafik
+# ke port 80 secara default). Docker sendiri menyetel
 # net.ipv4.ip_unprivileged_port_start=0 sehingga tidak terlihat di compose.
 USER root
 RUN setcap 'cap_net_bind_service=+ep' "$(command -v node)" && getcap "$(command -v node)"

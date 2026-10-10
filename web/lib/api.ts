@@ -1,6 +1,15 @@
 // Pemanggil API untuk Server Component (Next server -> API NestJS).
-// Di container: INTERNAL_API_URL=http://api:3000 (langsung, tanpa lewat Nginx).
-// Di lokal:     default http://localhost:3220.
+//
+// Base URL diambil dari environment, berurutan:
+//   1. INTERNAL_API_URL — diisi otomatis oleh BINDING Vercel Services (lihat
+//      vercel.json: binding "web" -> service "api"). JANGAN di-set manual di
+//      Project Settings; Vercel yang membuat nilainya, dan nilainya mengikuti
+//      deployment (preview menuju preview).
+//   2. Docker Compose mengisinya lewat docker-compose.yml (http://api:3000).
+//   3. Di lokal tanpa env: http://localhost:3220 (API `npm run start:dev`).
+//
+// Binding hanya tersedia saat RUNTIME di function, bukan saat build dan bukan di
+// middleware — karena itu fungsi ini dipakai komponen server (RSC), bukan middleware.
 
 import 'server-only';
 

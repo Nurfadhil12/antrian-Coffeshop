@@ -99,7 +99,12 @@ export class AppController {
     migrate: MigrateStatus | null,
   ): string | null {
     if (this.prisma.urlMissing) {
-      return 'DATABASE_URL belum di-set di deployment/.env. Isi lalu jalankan: docker compose up -d';
+      return (
+        'DATABASE_URL belum ada di environment. Di Docker Compose: isi deployment/.env ' +
+        '(lihat deployment/README.md). Di Vercel: pasang database dari Marketplace (mis. Neon) ' +
+        'atau set DATABASE_URL / POSTGRES_PRISMA_URL / POSTGRES_URL di Project Settings → ' +
+        'Environment Variables.'
+      );
     }
     if (db === 'down') {
       return 'Host database tidak bisa dijangkau dari container ini. Periksa isi DATABASE_URL (host/port) dan status container db.';
@@ -112,7 +117,12 @@ export class AppController {
         return 'Migrasi sedang berjalan di latar — muat ulang sebentar lagi.';
       }
       if (migrate?.status === 'disabled') {
-        return 'Migrasi otomatis dimatikan (RUN_MIGRATIONS=false) — itu normal di compose, migrasi dijalankan service api-migrate. Cek: docker compose logs api-migrate';
+        return (
+          'Migrasi otomatis dimatikan (RUN_MIGRATIONS=false) — itu normal. Di Docker Compose ' +
+          'migrasi dijalankan service api-migrate: docker compose logs api-migrate. Di Vercel ' +
+          'Services tidak ada langkah itu, jadi jalankan sekali dari komputer: ' +
+          'cd api && DATABASE_URL="<url-langsung>" npx prisma migrate deploy'
+        );
       }
       return 'Tabel belum ada. Jalankan migrasi: make migrate';
     }
