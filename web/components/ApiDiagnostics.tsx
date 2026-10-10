@@ -43,6 +43,32 @@ export function ApiDiagnostics({
             <dd>
               status={health.status} · db={health.db} · schema={health.schema}
             </dd>
+            {health.schemaDetail?.missingMarkers?.length ? (
+              <>
+                <dt>kolom hilang</dt>
+                <dd>{health.schemaDetail.missingMarkers.join(', ')}</dd>
+              </>
+            ) : null}
+            {health.schemaDetail?.foreignTables?.length ? (
+              <>
+                <dt>tabel aplikasi lain</dt>
+                <dd>{health.schemaDetail.foreignTables.join(', ')}</dd>
+              </>
+            ) : null}
+            {health.schemaDetail?.migrations ? (
+              <>
+                <dt>migrasi terpasang</dt>
+                <dd>
+                  {health.schemaDetail.migrations.hasTable
+                    ? `${health.schemaDetail.migrations.appliedCount} selesai${
+                        health.schemaDetail.migrations.lastName
+                          ? ` · terakhir ${health.schemaDetail.migrations.lastName}`
+                          : ''
+                      }`
+                    : 'belum ada (_prisma_migrations tidak ada)'}
+                </dd>
+              </>
+            ) : null}
             <dt>database</dt>
             <dd>
               {health.dbSource} → {health.dbHost} ({health.latencyMs} ms)

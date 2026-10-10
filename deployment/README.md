@@ -496,8 +496,31 @@ integrasi Neon:
     DATABASE_URL="postgresql://…-pooler…/neondb?sslmode=require" \
       npx prisma migrate deploy
 
-Setelah itu `GET /api/health` harus menjawab `schema: "ok"`. Kalau masih `"missing"`,
-field `hint` di respons itu menyebut persis langkah yang kurang.
+Setelah itu `GET /api/health` harus menjawab `schema: "ok"`. Kalau tidak, baca field `hint`
+di respons itu — ia menyebut persis langkah yang kurang.
+
+### Memeriksa database sebelum menyalahkan aplikasi
+
+`schema` di `/api/health` bisa bernilai `ok` / `partial` / `missing` / `unknown`.
+`partial` berarti tabelnya ada tapi **kolomnya bukan milik aplikasi ini** — gejalanya
+`P2022` ("kolom belum ada"), dan ini yang paling menyesatkan karena `db: "up"` tetap hijau.
+Probe skema memeriksa kolom yang benar-benar dipakai aplikasi, bukan sekadar keberadaan
+tabel `queues`.
+
+Pemeriksaan lengkap dari terminal (read-only, aman dijalankan ke database produksi):
+
+    cd api
+    DATABASE_URL="<url>" npx tsx scripts/db-doctor.ts      # atau: npm run db:doctor
+
+Skrip itu melaporkan status skema, daftar kolom yang hilang, **tabel milik aplikasi lain**,
+dan berapa migrasi yang tercatat di `_prisma_migrations`, lalu menyimpulkan langkahnya.
+
+> **Jangan memakai satu database untuk dua aplikasi.** Aplikasi antrian lain (mis. project
+> barbershop) punya tabel bernama `services`, `barbers`, dan `queues` juga. Kalau database
+> Neon-nya dipakai bersama, tabel `queues` versi aplikasi lain akan menang, migrasi aplikasi
+> ini gagal dengan "relation already exists", dan setiap query jatuh ke `P2022`. Untuk project
+> ini pakai database terpisah — Neon → New Project, atau New Database di project Neon yang sama
+> (biaya gratisnya juga terpisah).
 
 ### Yang belum diuji di sini
 

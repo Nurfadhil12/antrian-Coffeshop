@@ -5,6 +5,11 @@ import {
   databaseUrlCandidates,
   isVercelRuntime,
 } from './common/database-url';
+import {
+  probeSchema,
+  unknownSchemaProbe,
+  type SchemaProbe,
+} from './common/schema-probe';
 import { PrismaService } from './prisma/prisma.service';
 
 interface MigrateStatus {
@@ -67,19 +72,12 @@ export class AppController {
       this.logger.error(`Health check: query database gagal — ${error.split('\n')[0]}`);
     }
 
-    // Database bisa "up" (SELECT 1 jalan) sementara tabelnya belum ada — kejadian ini
-    // yang membingungkan: health hijau tapi aplikasi gagal dengan P2021.
-    let schema: 'ok' | 'missing' | 'unknown' = 'unknown';
-    if (db === 'up') {
-      try {
-        const rows = await this.prisma.$queryRaw<
-          { present: string | null }[]
-        >`SELECT to_regclass('public.queues')::text AS present`;
-        schema = rows[0]?.present ? 'ok' : 'missing';
-      } catch {
-        schema = 'unknown';
-      }
-    }
+    // Database bisa "up" (SELECT 1 jalan) sementara SKEMANYA tidak cocok — kejadian ini
+    // yang membingungkan: health hijau tapi aplikasi gagal dengan P2021/P2022.
+    // Probe-nya memeriksa kolom yang benar-benar dipakai aplikasi, bukan sekadar
+    // keberadaan tabelnya (lihat common/schema-probe.ts untuk alasannya).
+    const schemaProbe = db === 'up' ? await probeSchema(this.prisma) : unknownSchemaProbe();
+    const schema = schemaProbe.status;
 
     const migrate = this.readMigrateStatus();
 
@@ -93,9 +91,10 @@ export class AppController {
     const onVercel = isVercelRuntime();
 
     return {
-      status: db === 'up' && schema !== 'missing' ? 'ok' : 'degraded',
+      status: db === 'up' && schema === 'ok' ? 'ok' : 'degraded',
       db,
       schema,
+      schemaDetail: schemaProbe,
       migrate,
       latencyMs: Date.now() - startedAt,
       dbSource: this.prisma.urlSource,
@@ -108,7 +107,7 @@ export class AppController {
         vercelEnv: process.env.VERCEL_ENV ?? null,
         deployment: process.env.VERCEL_URL ?? null,
       },
-      hint: this.healthHint(db, schema, migrate, {
+      hint: this.healthHint(db, schemaProbe, migrate, {
         urlMissing: this.prisma.urlMissing,
         presentNames,
         onVercel,
@@ -121,7 +120,7 @@ export class AppController {
 
   private healthHint(
     db: 'up' | 'down',
-    schema: 'ok' | 'missing' | 'unknown',
+    probe: SchemaProbe,
     migrate: MigrateStatus | null,
     ctx: { urlMissing: boolean; presentNames: string[]; onVercel: boolean },
   ): string | null {
@@ -145,32 +144,77 @@ export class AppController {
       );
     }
     if (db === 'down') {
-      return 'Host database tidak bisa dijangkau dari container ini. Periksa isi DATABASE_URL (host/port) dan status container db.';
+      return 'Host database tidak bisa dijangkau dari container ini. Periksa isi DATABASE_URL (host/port) dan status database.';
     }
-    if (schema === 'missing') {
-      if (migrate?.status === 'failed') {
-        return 'Migrasi otomatis GAGAL (lihat migrate.error). Setelah diperbaiki, redeploy.';
-      }
-      if (migrate?.status === 'pending') {
-        return 'Migrasi sedang berjalan di latar — muat ulang sebentar lagi.';
-      }
-      if (migrate?.status === 'disabled') {
+
+    // ── Skema TIDAK cocok: kasus yang paling menyesatkan, karena "db: up" hijau ──
+    if (probe.status === 'partial' || probe.status === 'missing') {
+      const missing = probe.missingMarkers.slice(0, 4).join(', ');
+      const foreign = probe.foreignTables;
+
+      // Konteks migrasi ditambahkan ke setiap pesan di cabang ini: "disabled"
+      // menjelaskan mengapa tidak ada migrasi yang berjalan sendiri.
+      const migrateNote =
+        migrate?.status === 'failed'
+          ? ` Migrasi otomatis terakhir GAGAL: ${migrate.error ?? 'lihat migrate.error'}.`
+          : migrate?.status === 'pending'
+            ? ' Migrasi otomatis sedang berjalan di latar — muat ulang sebentar lagi.'
+            : migrate?.status === 'disabled'
+              ? ' (Migrasi otomatis memang dimatikan: RUN_MIGRATIONS=false.)'
+              : '';
+
+      // Paling sering terjadi lebih dulu: database baru yang belum pernah dimigrasi.
+      if (probe.presentAppTables.length === 0) {
         return (
-          'Migrasi otomatis dimatikan (RUN_MIGRATIONS=false) — itu normal. Di Docker Compose ' +
-          'migrasi dijalankan service api-migrate: docker compose logs api-migrate. Di Vercel ' +
-          'Services tidak ada langkah itu, jadi jalankan sekali dari komputer: ' +
-          'cd api && DATABASE_URL="<url-langsung>" npx prisma migrate deploy'
+          'Database ini belum punya satu pun tabel aplikasi ini (masih kosong), jadi memang belum ' +
+          'dimigrasi. Jalankan sekali dari komputer: cd api && ' +
+          'DATABASE_URL="<url-langsung>" npx prisma migrate deploy' +
+          migrateNote
         );
       }
-      if (ctx.onVercel) {
+
+      if (foreign.length > 0) {
         return (
-          'Tabel belum ada di database ini. Vercel tidak punya langkah migrasi otomatis, jadi ' +
-          'jalankan sekali dari komputer: cd api && ' +
-          'DATABASE_URL="<url-langsung-dari-neon>" npx prisma migrate deploy'
+          `Skema database ini TIDAK cocok dengan aplikasi (kolom hilang: ${missing}), dan ` +
+          `database ini juga berisi tabel milik aplikasi lain: ${foreign.join(', ')}. ` +
+          'Kemungkinan besar ini database yang dipakai bersama. JANGAN menjalankan migrasi ke ' +
+          'database ini — buat database terpisah di Neon (New Project, atau New Database di project ' +
+          'yang sama), arahkan DATABASE_URL ke database baru itu, lalu migrasi ke sana.' +
+          migrateNote
         );
       }
-      return 'Tabel belum ada. Jalankan migrasi: make migrate';
+
+      if (probe.migrations.appliedCount === 0) {
+        return (
+          `Tabel aplikasi sudah ada tapi kolomnya tidak cocok (hilang: ${missing}), dan ` +
+          '_prisma_migrations tidak mencatat satu pun migrasi yang selesai — jadi skema ini dibuat ' +
+          'cara lain, bukan oleh migrasi aplikasi ini. Pakai database kosong yang baru, lalu: ' +
+          'cd api && DATABASE_URL="<url-langsung>" npx prisma migrate deploy' +
+          migrateNote
+        );
+      }
+
+      return (
+        `Skema database tertinggal dari aplikasi (kolom hilang: ${missing}). Jalankan migrasi ke ` +
+        'database ini: cd api && DATABASE_URL="<url-langsung>" npx prisma migrate deploy ' +
+        '(pemeriksaan lengkap: npx tsx scripts/db-doctor.ts)' +
+        migrateNote
+      );
     }
+
+    if (probe.status === 'unknown') {
+      return 'Skema database belum bisa diperiksa (query metadata gagal). Lihat schemaDetail.error.';
+    }
+
+    // Sampai sini skema sudah cocok. Kalau laporan migrasi otomatis menunjukkan
+    // masalah, tetap sebutkan — supaya masalah yang pernah terjadi tidak hilang
+    // dari pandangan hanya karena hasil akhirnya sudah benar.
+    if (migrate?.status === 'failed') {
+      return `Skema sudah cocok, tapi laporan migrasi otomatis terakhir GAGAL: ${
+        migrate.error ?? 'lihat migrate.error'
+      }. Perbaiki penyebabnya lalu redeploy.`;
+    }
+
     return null;
   }
 }

@@ -187,7 +187,17 @@ export interface RangeReport {
 export interface HealthView {
   status: 'ok' | 'degraded';
   db: 'up' | 'down';
-  schema: 'ok' | 'missing' | 'unknown';
+  /** partial = tabel ada tapi kolomnya bukan milik aplikasi ini (gejala P2022). */
+  schema: 'ok' | 'partial' | 'missing' | 'unknown';
+  /** Rincian pemeriksaan skema: kolom hilang, tabel asing, migrasi terpasang. */
+  schemaDetail?: {
+    status: 'ok' | 'partial' | 'missing' | 'unknown';
+    missingMarkers: string[];
+    presentMarkers: string[];
+    foreignTables: string[];
+    migrations: { hasTable: boolean; appliedCount: number; lastName: string | null };
+    error: string | null;
+  } | null;
   migrate: { status: string; attempts: number; error: string | null; updatedAt: string } | null;
   latencyMs: number;
   dbSource: string;
