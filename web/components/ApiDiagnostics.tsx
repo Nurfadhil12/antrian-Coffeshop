@@ -30,6 +30,18 @@ export function ApiDiagnostics({
     return `tidak ada satu pun (dicoba: ${(env.missingNames ?? []).join(', ')})`;
   })();
 
+  // Status variabel override (COFFEESHOP_DATABASE_URL) ditampilkan tersendiri:
+  // inilah satu-satunya petunjuk yang membedakan "cara cepat sudah dipakai" dari
+  // "belum dibuat" — dan itu pertanyaan pertama setiap kali deploy masih salah
+  // database. Nama diambil dari daftar kandidat milik API, bukan ditulis ulang di
+  // sini, supaya tidak ada dua sumber untuk satu nama.
+  const overrideName = health?.env?.databaseUrlCandidates
+    ? Object.keys(health.env.databaseUrlCandidates).find((name) => name.startsWith('COFFEESHOP_'))
+    : undefined;
+  const overridePresent = overrideName
+    ? Boolean(health?.env?.databaseUrlCandidates?.[overrideName])
+    : undefined;
+
   return (
     <div className="diag">
       <h3>Gagal memuat {context}</h3>
@@ -78,6 +90,17 @@ export function ApiDiagnostics({
               <>
                 <dt>env database</dt>
                 <dd>{envRow}</dd>
+              </>
+            ) : null}
+            {overrideName ? (
+              <>
+                <dt>variabel override</dt>
+                <dd>
+                  {overrideName}:{' '}
+                  {overridePresent
+                    ? 'ADA di deployment ini'
+                    : 'BELUM dibuat → inilah langkah yang belum dikerjakan (Settings → Environment Variables, scope Production, lalu Redeploy)'}
+                </dd>
               </>
             ) : null}
             {health.env?.vercel ? (
