@@ -4,6 +4,7 @@ import {
   DATABASE_URL_NAMES,
   databaseUrlCandidates,
   isVercelRuntime,
+  OVERRIDE_URL_NAME,
 } from './common/database-url';
 import {
   probeSchema,
@@ -176,17 +177,18 @@ export class AppController {
 
       if (foreign.length > 0) {
         return (
-          `Skema database ini TIDAK cocok dengan aplikasi (kolom hilang: ${missing}), dan ` +
-          `database ini juga berisi tabel milik aplikasi lain: ${foreign.join(', ')} — jadi ini ` +
-          'database milik aplikasi lain, bukan database aplikasi ini. JANGAN menjalankan migrasi ' +
-          'ke sini. Urutannya: (1) Vercel → project → Storage → database yang tersambung → ' +
-          'Disconnect — WAJIB lebih dulu, karena koneksi itu menyuntik DATABASE_URL / ' +
-          'POSTGRES_PRISMA_URL / POSTGRES_URL sehingga selama masih tersambung nilai-nilainya ' +
-          'tetap menunjuk ke database lama; (2) buat database baru di Neon (New Project, supaya ' +
-          'host-nya berbeda dan perubahannya terlihat jelas di panel ini); (3) connect database ' +
-          'baru itu ke project ini, lalu Redeploy; (4) migrasi ke database baru: cd api && ' +
-          'DATABASE_URL="<url-baru>" npx prisma migrate deploy. Tanda berhasil: baris "database" ' +
-          'di panel ini berubah menjadi .../<nama-database-baru> dan schema menjadi ok.' +
+          `Database ini milik aplikasi lain (tabel asing: ${foreign.join(', ')}), bukan database ` +
+          'aplikasi ini — JANGAN menjalankan migrasi ke sini. Buat database baru di Neon, lalu ' +
+          'pilih satu cara: ' +
+          '(a) RAPI — Vercel → project → Storage → database lama → Disconnect, lalu connect ' +
+          'database baru + Redeploy; ' +
+          '(b) CEPAT — Vercel → Settings → Environment Variables → tambah ' +
+          `${OVERRIDE_URL_NAME} = <url-database-baru> dengan scope Production, lalu Redeploy. ` +
+          'Variabel itu diperiksa LEBIH DULU daripada DATABASE_URL, jadi Storage tidak perlu ' +
+          'disentuh dan koneksi lama tidak menghalangi. ' +
+          'Terakhir jalankan migrasi: cd api && DATABASE_URL="<url-baru>" npx prisma migrate deploy. ' +
+          'Tanda berhasil: baris "database" di panel ini berganti ke host/nama database baru, dan ' +
+          `dbSource berubah menjadi ${OVERRIDE_URL_NAME} bila memakai cara (b).` +
           migrateNote
         );
       }

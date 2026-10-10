@@ -10,6 +10,7 @@
  */
 
 export type DatabaseUrlSource =
+  | 'COFFEESHOP_DATABASE_URL'
   | 'DATABASE_URL'
   | 'POSTGRES_PRISMA_URL'
   | 'POSTGRES_URL'
@@ -32,10 +33,22 @@ export interface DatabaseUrlInfo {
 const PLACEHOLDER = 'postgresql://placeholder:placeholder@127.0.0.1:5432/placeholder';
 
 /**
- * Nama env var yang dicoba, berurutan. Diekspor supaya pesan diagnostik bisa
- * menyebut daftarnya tanpa menyalin ulang (dan tidak pernah menyebut nilainya).
+ * Nama env var yang dicoba, berurutan.
+ *
+ * `COFFEESHOP_DATABASE_URL` ada di urutan PERTAMA sebagai jalan keluar resmi:
+ * kalau project Vercel tersambung ke database yang salah (mis. database milik
+ * aplikasi lain), menambahkan satu variabel ini di Settings → Environment Variables
+ * sudah cukup untuk memindahkan koneksi. Tidak perlu memutus koneksi Storage dulu —
+ * yang penting `dbSource` di /api/health ikut berubah, sehingga tetap jelas mana yang
+ * benar-benar dipakai.
+ *
+ * Diekspor supaya pesan diagnostik bisa menyebut daftarnya tanpa menyalin ulang
+ * (dan tidak pernah menyebut nilainya).
  */
+export const OVERRIDE_URL_NAME = 'COFFEESHOP_DATABASE_URL';
+
 export const DATABASE_URL_NAMES: ReadonlyArray<Exclude<DatabaseUrlSource, 'placeholder'>> = [
+  OVERRIDE_URL_NAME,
   'DATABASE_URL',
   'POSTGRES_PRISMA_URL',
   'POSTGRES_URL',

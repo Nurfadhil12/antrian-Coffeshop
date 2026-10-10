@@ -522,6 +522,19 @@ dan berapa migrasi yang tercatat di `_prisma_migrations`, lalu menyimpulkan lang
 > ini pakai database terpisah — Neon → New Project, atau New Database di project Neon yang sama
 > (biaya gratisnya juga terpisah).
 
+**Kalau project sudah terlanjur tersambung ke database yang salah**, ada dua cara pindah:
+
+1. **Rapi** — Vercel → project → **Storage** → database lama → **Disconnect**, lalu connect
+   database baru + Redeploy. Perlu, karena koneksi itu menyuntik `DATABASE_URL`,
+   `POSTGRES_PRISMA_URL`, dan `POSTGRES_URL` sekaligus.
+2. **Cepat** — Vercel → **Settings → Environment Variables** → tambah
+   `COFFEESHOP_DATABASE_URL` = URL database baru (scope **Production**), lalu Redeploy.
+   Variabel ini diperiksa **lebih dulu** daripada `DATABASE_URL`, jadi koneksi lama tidak
+   perlu diputus dulu. Bukti bahwa yang dipakai benar: field `dbSource` di `/api/health`
+   berubah menjadi `COFFEESHOP_DATABASE_URL`.
+
+Sesudah pindah, migrasi tetap perlu dijalankan ke database baru itu (bagian di atas).
+
 ### Yang belum diuji di sini
 
 Build dan runtime Vercel **belum pernah dijalankan** dari repo ini (butuh akun Anda):
