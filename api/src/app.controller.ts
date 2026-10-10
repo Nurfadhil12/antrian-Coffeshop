@@ -177,10 +177,16 @@ export class AppController {
       if (foreign.length > 0) {
         return (
           `Skema database ini TIDAK cocok dengan aplikasi (kolom hilang: ${missing}), dan ` +
-          `database ini juga berisi tabel milik aplikasi lain: ${foreign.join(', ')}. ` +
-          'Kemungkinan besar ini database yang dipakai bersama. JANGAN menjalankan migrasi ke ' +
-          'database ini — buat database terpisah di Neon (New Project, atau New Database di project ' +
-          'yang sama), arahkan DATABASE_URL ke database baru itu, lalu migrasi ke sana.' +
+          `database ini juga berisi tabel milik aplikasi lain: ${foreign.join(', ')} — jadi ini ` +
+          'database milik aplikasi lain, bukan database aplikasi ini. JANGAN menjalankan migrasi ' +
+          'ke sini. Urutannya: (1) Vercel → project → Storage → database yang tersambung → ' +
+          'Disconnect — WAJIB lebih dulu, karena koneksi itu menyuntik DATABASE_URL / ' +
+          'POSTGRES_PRISMA_URL / POSTGRES_URL sehingga selama masih tersambung nilai-nilainya ' +
+          'tetap menunjuk ke database lama; (2) buat database baru di Neon (New Project, supaya ' +
+          'host-nya berbeda dan perubahannya terlihat jelas di panel ini); (3) connect database ' +
+          'baru itu ke project ini, lalu Redeploy; (4) migrasi ke database baru: cd api && ' +
+          'DATABASE_URL="<url-baru>" npx prisma migrate deploy. Tanda berhasil: baris "database" ' +
+          'di panel ini berubah menjadi .../<nama-database-baru> dan schema menjadi ok.' +
           migrateNote
         );
       }
