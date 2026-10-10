@@ -1,0 +1,21 @@
+# Secrets & artefak lokal folder deployment/
+.env
+.env.*
+!.env.example
+
+# Hasil backup database
+backups/
+*.dump
+*.dump.gz
+*.sql.gz
+
+# Sertifikat & log
+certbot/
+certbot-www/
+letsencrypt/
+*.pem
+*.key
+nginx/logs/
+
+# OS
+.DS_Store

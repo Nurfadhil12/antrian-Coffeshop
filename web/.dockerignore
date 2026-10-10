@@ -1,0 +1,24 @@
+# web/.dockerignore
+node_modules
+.next
+out
+build
+dist
+coverage
+.git
+.gitignore
+.github
+.vscode
+.idea
+*.log
+npm-debug.log*
+yarn-error.log*
+.env
+.env.*
+!.env.example
+Dockerfile
+.dockerignore
+docker-compose*.yml
+*.md
+.tmp
+tmp

@@ -1,0 +1,289 @@
+# deployment/docker-compose.yml — base stack (dev/staging/produksi)
+#
+# Arsitektur:  Client -> Nginx (80/443) -> web (Next.js :3000) & api (NestJS :3000)
+#                                          api -> db (PostgreSQL :5432)
+#
+# Struktur repo yang diasumsikan:
+#   <repo-root>/
+#     api/            <- source NestJS (Dockerfile ada di folder ini)
+#     web/            <- source Next.js (Dockerfile ada di folder ini)
+#     deployment/     <- folder ini (compose, nginx, scripts, .env)
+#
+# Jalankan dari folder deployment/:
+#   cp .env.example .env
+#   docker compose up -d --build
+#
+# Produksi (tambah override):
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Catatan: compose otomatis membaca deployment/.env untuk interpolasi ${VAR} di file
+# ini, karena file ini berada di folder deployment/.
+
+name: ${COMPOSE_PROJECT_NAME:-coffeeshop}
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # ─────────────────────────── DATABASE ───────────────────────────
+  db:
+    image: postgres:${POSTGRES_VERSION:-17}-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD wajib diisi di deployment/.env}
+      POSTGRES_DB: ${POSTGRES_DB:-coffeeshop}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+      # PGDATA di subfolder supaya volume tidak "kotor" oleh lost+found
+      PGDATA: /var/lib/postgresql/data/pgdata
+      TZ: ${TZ:-UTC}
+    command:
+      - postgres
+      - -c
+      - max_connections=${POSTGRES_MAX_CONNECTIONS:-100}
+      - -c
+      - shared_buffers=${POSTGRES_SHARED_BUFFERS:-256MB}
+      - -c
+      - effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-768MB}
+      - -c
+      - work_mem=${POSTGRES_WORK_MEM:-8MB}
+      - -c
+      - maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-64MB}
+      - -c
+      - log_min_duration_statement=${POSTGRES_LOG_MIN_DURATION_MS:-1000}
+      - -c
+      - timezone=UTC
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Dijalankan HANYA saat volume masih kosong (initdb pertama kali)
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      # Tempat hasil pg_dump (lihat scripts/backup-db.sh)
+      - ${BACKUP_DIR:-./backups}:/backups
+    # Port hanya untuk pengembangan; ditutup di produksi oleh
+    # docker-compose.prod.yml (ports: !reset [])
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\" -h 127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    shm_size: 256mb
+    stop_grace_period: 60s
+    networks:
+      - data-net
+
+  # ──────────────────────────── BACKEND ───────────────────────────
+  api:
+    build:
+      context: ../api
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        NODE_VERSION: ${NODE_VERSION:-24}
+    image: ${API_IMAGE:-coffeeshop-api:local}
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      TZ: ${TZ:-UTC}
+      SHOP_TIMEZONE: ${SHOP_TIMEZONE:-Asia/Jakarta}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Dipakai Prisma (CLI & driver adapter) — password harus URL-encoded
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-coffeeshop}?schema=public
+      # Dipakai docker-entrypoint.sh untuk menunggu database siap
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_POOL_MAX: ${DB_POOL_MAX:-10}
+      # Migrasi bukan tugas container ini — lihat service api-migrate.
+      # Entrypoint hanya menuliskan statusnya ke /api/health.
+      RUN_MIGRATIONS: ${RUN_MIGRATIONS:-false}
+      CORS_ORIGIN: ${CORS_ORIGIN:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      # Wajib: api tidak pernah start di atas skema lama, dan migrasi yang gagal
+      # membatalkan start api (bukan aplikasi setengah jalan).
+      api-migrate:
+        condition: service_completed_successfully
+    expose:
+      - "3000"
+    networks:
+      - web-net
+      - data-net
+
+  # ───────────────────────── MIGRASI DATABASE ─────────────────────
+  # Dijalankan OTOMATIS sebelum service `api` start (lihat depends_on di atas),
+  # jadi `docker compose up -d` selalu berjalan di atas skema terbaru.
+  # Memakai target build "migrator" yang masih membawa devDependencies (Prisma CLI).
+  #
+  # Manual (mis. setelah menambah migrasi baru tanpa restart api):
+  #   docker compose run --rm api-migrate
+  #   make migrate
+  api-migrate:
+    build:
+      context: ../api
+      dockerfile: Dockerfile
+      target: migrator
+      args:
+        NODE_VERSION: ${NODE_VERSION:-24}
+    image: ${API_MIGRATE_IMAGE:-coffeeshop-api:migrator}
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-coffeeshop}?schema=public
+      DB_HOST: db
+      DB_PORT: "5432"
+      SHOP_TIMEZONE: ${SHOP_TIMEZONE:-Asia/Jakarta}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - data-net
+
+  # ──────────────────────── DATA CONTOH (opsional) ─────────────────────
+  # Sekali saja, dan tidak ikut `docker compose up` (profil "tools"):
+  #   docker compose --profile tools run --rm api-seed
+  #   make seed
+  # Aman dijalankan berulang: menu/barista di-upsert, contoh antrian hanya dibuat
+  # kalau tanggal itu belum punya antrian.
+  api-seed:
+    profiles: ["tools"]
+    build:
+      context: ../api
+      dockerfile: Dockerfile
+      target: migrator
+      args:
+        NODE_VERSION: ${NODE_VERSION:-24}
+    image: ${API_MIGRATE_IMAGE:-coffeeshop-api:migrator}
+    command: ["npx", "tsx", "prisma/seed.ts"]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-coffeeshop}?schema=public
+      DB_HOST: db
+      DB_PORT: "5432"
+      SHOP_TIMEZONE: ${SHOP_TIMEZONE:-Asia/Jakarta}
+    depends_on:
+      db:
+        condition: service_healthy
+      api-migrate:
+        condition: service_completed_successfully
+    networks:
+      - data-net
+
+  # ─────────────────────────── FRONTEND ───────────────────────────
+  web:
+    build:
+      context: ../web
+      dockerfile: Dockerfile
+      target: runner
+      args:
+        NODE_VERSION: ${NODE_VERSION:-24}
+        # NEXT_PUBLIC_* ditanam saat BUILD. Semua trafik lewat Nginx di domain yang
+        # sama, jadi default relatif "/api" sudah cukup.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
+        # Target rewrites /api di server Next (dipakai kalau frontend diakses
+        # langsung di port 3120, bukan lewat Nginx). Nama service "api" hanya bisa
+        # di-resolve di dalam network compose.
+        API_PROXY_TARGET: http://api:3000
+    image: ${WEB_IMAGE:-coffeeshop-web:local}
+    restart: unless-stopped
+    logging: *default-logging
+    # Akses langsung ke frontend (HTTP, tanpa Nginx/TLS) — berguna saat
+    # pengembangan supaya tidak kena peringatan sertifikat self-signed.
+    # Hanya loopback, jadi tidak terbuka ke internet.
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3120}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+      TZ: ${TZ:-UTC}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
+      # URL internal untuk server-side fetch (SSR/RSC) — hemat round-trip lewat Nginx
+      INTERNAL_API_URL: http://api:3000
+    depends_on:
+      api:
+        condition: service_started
+    expose:
+      - "3000"
+    networks:
+      - web-net
+
+  # ──────────────────────── REVERSE PROXY / TLS ───────────────────
+  nginx:
+    build:
+      context: ./nginx
+      args:
+        NGINX_VERSION: ${NGINX_VERSION:-stable}
+    image: ${NGINX_IMAGE:-coffeeshop-nginx:local}
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+      - "${HTTPS_PORT:-8443}:443"
+    environment:
+      # Dipakai oleh envsubst bawaan image nginx (nginx/templates/app.conf.template)
+      DOMAIN: ${DOMAIN:-localhost}
+      NGINX_CLIENT_MAX_BODY_SIZE: ${NGINX_CLIENT_MAX_BODY_SIZE:-25m}
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/templates:/etc/nginx/templates:ro
+      - ./nginx/snippets:/etc/nginx/snippets:ro
+      - certbot-www:/var/www/certbot
+      - letsencrypt:/etc/letsencrypt
+    depends_on:
+      api:
+        condition: service_started
+      web:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - web-net
+      - data-net
+
+  # Perpanjangan sertifikat otomatis tiap 12 jam (certbot hanya renew kalau <30 hari)
+  certbot:
+    image: certbot/certbot:${CERTBOT_VERSION:-v5.8.0}
+    restart: unless-stopped
+    logging: *default-logging
+    entrypoint:
+      - /bin/sh
+      - -c
+      - "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done"
+    volumes:
+      - certbot-www:/var/www/certbot
+      - letsencrypt:/etc/letsencrypt
+    networks:
+      # web-net (BUKAN data-net): certbot harus bisa keluar ke internet untuk
+      # menghubungi Let's Encrypt, sedangkan data-net sengaja lebih tertutup.
+      - web-net
+
+volumes:
+  pgdata:
+  letsencrypt:
+  certbot-www:
+
+networks:
+  # Nginx <-> web <-> api (+ certbot)
+  web-net:
+    driver: bridge
+  # api <-> db.
+  # SENGAJA bukan `internal: true`: Docker SILENTLY gagal mem-publish port
+  # container yang terhubung ke network internal (NetworkSettings.Ports jadi
+  # kosong) tanpa error, sehingga database tidak bisa diakses dari host untuk
+  # psql/DBeaver/`npm run start:dev`. Port db tetap ditutup di produksi lewat
+  # docker-compose.prod.yml (ports: !reset []).
+  data-net:
+    driver: bridge

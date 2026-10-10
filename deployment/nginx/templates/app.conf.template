@@ -1,0 +1,146 @@
+# deployment/nginx/templates/app.conf.template
+#
+# File ini diproses otomatis oleh entrypoint image nginx resmi (envsubst) menjadi
+# /etc/nginx/conf.d/app.conf saat container start. Hanya variabel yang ADA di
+# environment yang di-substitusi — jadi $host, $request_uri, dan variabel nginx
+# lain tetap utuh. Variabel yang dipakai di sini: ${DOMAIN}, ${NGINX_CLIENT_MAX_BODY_SIZE}.
+
+upstream api_upstream {
+    server api:3000;
+    keepalive 32;
+}
+
+upstream web_upstream {
+    server web:3000;
+    keepalive 32;
+}
+
+# Untuk WebSocket / SSE (Next.js HMR, dsb.)
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+# ───────────────────────── HTTP :80 ─────────────────────────
+server {
+    listen      80;
+    listen      [::]:80;
+    server_name ${DOMAIN};
+
+    # Health check internal (dipakai HEALTHCHECK container nginx, dan
+    # `curl http://127.0.0.1:${HTTP_PORT}/healthz` dari host).
+    location = /healthz {
+        access_log off;
+        add_header Content-Type text/plain;
+        return 200 "ok\n";
+    }
+
+    # Verifikasi domain Let's Encrypt
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type "text/plain";
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# ───────────────────────── HTTPS :443 ────────────────────────
+server {
+    listen      443 ssl;
+    listen      [::]:443 ssl;
+    http2       on;
+    server_name ${DOMAIN};
+
+    # Sertifikat Let's Encrypt. Saat pertama kali belum ada isinya — jalankan dulu:
+    #   ./scripts/init-letsencrypt.sh
+    # (script itu membuat sertifikat dummy self-signed supaya nginx bisa start,
+    #  atau sertifikat self-signed saja kalau DOMAIN=localhost)
+    ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
+
+    ssl_protocols             TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    # Hanya cipher ECDHE → tidak butuh file dhparam.pem (ssl_dhparam yang menunjuk
+    # file tidak ada membuat nginx MENOLAK start).
+    ssl_ciphers               ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_session_cache         shared:SSL:10m;
+    ssl_session_timeout       1d;
+    ssl_session_tickets       off;
+    # OCSP stapling sengaja tidak dipakai: butuh resolver, dan Let's Encrypt tidak
+    # lagi menyediakan OCSP.
+
+    # ── Header keamanan ──
+    # Dipakai juga di location yang punya add_header sendiri (lihat komentar di
+    # nginx/snippets/security-headers.conf).
+    include /etc/nginx/snippets/security-headers.conf;
+
+    client_max_body_size ${NGINX_CLIENT_MAX_BODY_SIZE};
+    limit_conn conn_limit 40;
+
+    # ── ACME challenge juga lewat HTTPS ──
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type "text/plain";
+    }
+
+    # Health check di HTTPS juga (dipakai `curl -sk https://$DOMAIN/healthz`).
+    # WAJIB ada di sini juga: kalau hanya ditulis di blok :80, permintaan https
+    # jatuh ke `location /` dan diteruskan ke Next.js -> 404, sementara healthcheck
+    # container tetap hijau karena memakai http://127.0.0.1/healthz.
+    location = /healthz {
+        access_log off;
+        include /etc/nginx/snippets/security-headers.conf;
+        add_header Content-Type text/plain;
+        return 200 "ok\n";
+    }
+
+    # ── Backend NestJS ──
+    # Path TIDAK dipotong (proxy_pass tanpa trailing slash) → /api/queues diteruskan
+    # sebagai /api/queues. Cocok dengan app.setGlobalPrefix('api') di api/src/main.ts.
+    # Kalau API-mu TIDAK memakai prefix, ubah jadi: proxy_pass http://api_upstream/;
+    location /api/ {
+        limit_req zone=api_limit burst=40 nodelay;
+
+        proxy_pass http://api_upstream;
+
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+
+        proxy_read_timeout    60s;
+        proxy_send_timeout    60s;
+        proxy_request_buffering off;
+        proxy_buffering        off;
+    }
+
+    # ── Static asset Next.js: cache jangka panjang ──
+    location /_next/static/ {
+        proxy_pass http://web_upstream;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        include /etc/nginx/snippets/security-headers.conf;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
+    # ── File publik Next.js (favicon, gambar, dsb.) ──
+    location ~* ^/(favicon\.ico|robots\.txt|sitemap\.xml|.*\.(?:png|jpg|jpeg|gif|svg|webp|avif|ico|woff2?|ttf|eot|mp4|webm))$ {
+        proxy_pass http://web_upstream;
+        include /etc/nginx/snippets/security-headers.conf;
+        add_header Cache-Control "public, max-age=604800";
+    }
+
+    # ── Frontend Next.js (SSR/RSC) ──
+    location / {
+        limit_req zone=web_limit burst=100 nodelay;
+
+        proxy_pass http://web_upstream;
+
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_buffering    off;      # biar streaming RSC tidak tertahan
+    }
+}

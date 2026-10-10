@@ -1,0 +1,176 @@
+// api/prisma/schema.prisma — model data antrian & pembukuan coffee shop
+//
+// Prisma 7: URL koneksi TIDAK lagi ditulis di sini — lihat api/prisma7.config.ts
+// (untuk CLI/migrasi) dan driver adapter @prisma/adapter-pg (untuk runtime).
+// Client di-generate ke src/generated/prisma (di-.gitignore) via: npm run prisma:generate
+//
+// Semua nominal uang disimpan sebagai Int rupiah (tanpa desimal) supaya tidak ada
+// galat pembulatan floating point di pembukuan.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+  runtime      = "nodejs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────── Enum ───────────────────────────
+
+enum MenuCategory {
+  KOPI
+  NON_KOPI
+  MAKANAN
+  SNACK
+  LAINNYA
+}
+
+enum OrderType {
+  DINE_IN
+  TAKE_AWAY
+}
+
+enum QueueStatus {
+  WAITING
+  IN_PROGRESS
+  DONE
+  CANCELLED
+}
+
+enum PaymentStatus {
+  UNPAID
+  PAID
+  VOID
+}
+
+enum PaymentMethod {
+  CASH
+  QRIS
+  TRANSFER
+  E_WALLET
+}
+
+enum LedgerType {
+  INCOME
+  EXPENSE
+}
+
+// ─────────────────────── Master data ────────────────────────
+
+// Item menu: Kopi Susu, Americano, Croissant, dsb.
+model MenuItem {
+  id        Int          @id @default(autoincrement())
+  name      String       @unique
+  category  MenuCategory @default(KOPI)
+  price     Int          @default(0)
+  active    Boolean      @default(true)
+  createdAt DateTime     @default(now()) @map("created_at")
+
+  orderItems OrderItem[]
+
+  @@index([category, active])
+  @@map("menu_items")
+}
+
+// Barista yang melayani antrian.
+model Barista {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  phone     String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  queues Queue[]
+
+  @@map("baristas")
+}
+
+// ─────────────────────── Antrian / order ────────────────────
+
+// Tiket antrian sekaligus nota pesanan. Nomor direset setiap hari:
+// number = urutan dalam queueDate, code = "A-001" untuk dipanggil/ditampilkan.
+model Queue {
+  id            Int          @id @default(autoincrement())
+  number        Int
+  code          String
+  queueDate     DateTime     @map("queue_date") @db.Date
+  customerName  String       @map("customer_name")
+  customerPhone String?      @map("customer_phone")
+  orderType     OrderType    @default(DINE_IN) @map("order_type")
+  tableNumber   String?      @map("table_number")
+  status        QueueStatus  @default(WAITING)
+  note          String?
+
+  // Nilai nota dalam rupiah. Diisi dari total OrderItem; discount dikurangi manual.
+  subtotal Int @default(0)
+  discount Int @default(0)
+  total    Int @default(0)
+
+  paymentStatus PaymentStatus  @default(UNPAID) @map("payment_status")
+  paymentMethod PaymentMethod? @map("payment_method")
+  paidAt        DateTime?      @map("paid_at")
+
+  baristaId  Int?      @map("barista_id")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  startedAt  DateTime? @map("started_at")
+  finishedAt DateTime? @map("finished_at")
+
+  barista       Barista?      @relation(fields: [baristaId], references: [id])
+  orderItems    OrderItem[]
+  ledgerEntries LedgerEntry[]
+
+  @@unique([queueDate, number])
+  @@index([queueDate, status])
+  @@index([paymentStatus])
+  @@map("queues")
+}
+
+// Satu baris pesanan dalam sebuah nota. nameSnapshot + unitPrice disimpan agar
+// nota lama tidak berubah kalau harga menu diedit kemudian.
+model OrderItem {
+  id           Int      @id @default(autoincrement())
+  queueId      Int      @map("queue_id")
+  menuItemId   Int?     @map("menu_item_id")
+  nameSnapshot String   @map("name_snapshot")
+  qty          Int      @default(1)
+  unitPrice    Int      @map("unit_price")
+  lineTotal    Int      @map("line_total")
+  note         String?
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  queue    Queue     @relation(fields: [queueId], references: [id], onDelete: Cascade)
+  menuItem MenuItem? @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
+
+  @@index([queueId])
+  @@map("order_items")
+}
+
+// ─────────────────────────── Pembukuan ──────────────────────
+
+// Satu baris buku kas. Sumber tunggal angka pendapatan & pengeluaran:
+//  - pendapatan penjualan dibuat OTOMATIS saat nota dibayar (queueId terisi)
+//  - pengeluaran (beli biji kopi, gaji, sewa) diinput manual di halaman Pembukuan
+// `amount` selalu positif; arah ditentukan oleh `type`.
+model LedgerEntry {
+  id          Int            @id @default(autoincrement())
+  entryDate   DateTime       @map("entry_date") @db.Date
+  type        LedgerType
+  category    String
+  amount      Int
+  method      PaymentMethod?
+  description String?
+  // Satu nota maksimal menghasilkan satu baris pendapatan.
+  queueId     Int?           @unique @map("queue_id")
+  createdAt   DateTime       @default(now()) @map("created_at")
+
+  // SetNull: baris pembukuan TIDAK ikut terhapus saat nota dihapus, supaya
+  // riwayat kas tidak pernah bolong. queueId jadi null dan barisnya tetap ada.
+  queue Queue? @relation(fields: [queueId], references: [id], onDelete: SetNull)
+
+  @@index([entryDate, type])
+  @@index([category])
+  @@map("ledger_entries")
+}

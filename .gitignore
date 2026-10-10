@@ -1,0 +1,38 @@
+# .gitignore tingkat root — pagar pengaman.
+# Setiap folder (api/, web/, deployment/) sudah punya .gitignore sendiri; file ini
+# memastikan tidak ada sampah atau rahasia yang ikut ter-commit dari level atas.
+
+# Dependensi
+node_modules/
+
+# Hasil build & cache
+dist/
+.next/
+out/
+build/
+*.tsbuildinfo
+.turbo/
+
+# Prisma Client hasil generate (dibuat oleh `npm run prisma:generate`)
+api/src/generated/
+
+# Environment — JANGAN pernah di-commit (berisi password database)
+.env
+.env.*
+!.env.example
+
+# Hasil backup database
+backups/
+*.dump
+*.dump.gz
+*.sql.gz
+
+# Sertifikat & kunci
+*.pem
+*.key
+letsencrypt/
+certbot/
+
+# Log & OS
+*.log
+.DS_Store

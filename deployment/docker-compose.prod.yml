@@ -1,0 +1,66 @@
+# deployment/docker-compose.prod.yml — override produksi
+#
+# Pakai bersama base:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# atau lewat:  make prod-up
+#
+# Yang diubah vs base:
+#   - restart: always (aman untuk reboot VPS)
+#   - port Postgres DITUTUP dari host (ports: !reset [])
+#   - limit CPU/memori per service
+#   - log rotation lebih ketat
+#   - no-new-privileges untuk api, web, nginx
+#
+# Catatan: tag !reset butuh docker compose >= 2.24 (di sini v2.39).
+
+services:
+  db:
+    restart: always
+    # WAJIB !reset: `ports: []` MENAMBAH, bukan mengganti — portnya tetap terbuka.
+    ports: !reset []
+    deploy:
+      resources:
+        limits:
+          cpus: "${DB_CPU_LIMIT:-1.0}"
+          memory: ${DB_MEM_LIMIT:-1g}
+        reservations:
+          memory: ${DB_MEM_RESERVATION:-512m}
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  api:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "${API_CPU_LIMIT:-1.5}"
+          memory: ${API_MEM_LIMIT:-1g}
+        reservations:
+          memory: ${API_MEM_RESERVATION:-256m}
+    security_opt:
+      - no-new-privileges:true
+
+  web:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "${WEB_CPU_LIMIT:-1.0}"
+          memory: ${WEB_MEM_LIMIT:-768m}
+        reservations:
+          memory: ${WEB_MEM_RESERVATION:-256m}
+    security_opt:
+      - no-new-privileges:true
+
+  nginx:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "${NGINX_CPU_LIMIT:-1.0}"
+          memory: ${NGINX_MEM_LIMIT:-256m}
+    security_opt:
+      - no-new-privileges:true

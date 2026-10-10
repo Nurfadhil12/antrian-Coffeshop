@@ -1,0 +1,116 @@
+# deployment/.github/workflows/deploy.yml
+#
+# Build image api & web → push ke GHCR → deploy ke VPS lewat SSH.
+#
+# SUPAYA AKTIF: pindahkan file ini ke root repo (GitHub hanya membaca
+# .github/workflows/ di root repo):
+#   mkdir -p .github/workflows
+#   mv deployment/.github/workflows/deploy.yml .github/workflows/deploy.yml
+#
+# Secret yang dibutuhkan (Settings → Secrets and variables → Actions):
+#   SSH_HOST, SSH_USER, SSH_KEY (private key deploy), DEPLOY_PATH (mis. /srv/app)
+# Variable opsional: NEXT_PUBLIC_API_URL (mis. https://example.com/api)
+#
+# Image GHCR default privat → di VPS sekali saja:
+#   echo "$PAT" | docker login ghcr.io -u <username> --password-stdin
+# atau ubah visibility package menjadi public.
+#
+# Catatan: login & build memakai perintah `docker` langsung (tanpa action pihak
+# ketiga selain actions/checkout), supaya tidak terikat versi action yang berubah.
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    name: Build & push image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api
+            context: api
+            target: runtime
+          - name: web
+            context: web
+            target: runner
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        run: |
+          docker buildx create --use --name ci-builder --driver docker-container || docker buildx use ci-builder
+          docker buildx inspect --bootstrap
+
+      - name: Login ke GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
+
+      - name: Build & push ${{ matrix.name }}
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.name }}
+          TAG: ${{ github.sha }}
+          NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL || '/api' }}
+        run: |
+          IMAGE_LC="$(echo "$IMAGE" | tr '[:upper:]' '[:lower:]')"
+          SHORT="${TAG:0:7}"
+          docker buildx build \
+            --push \
+            --file "${{ matrix.context }}/Dockerfile" \
+            --target "${{ matrix.target }}" \
+            --build-arg NEXT_PUBLIC_API_URL="$NEXT_PUBLIC_API_URL" \
+            --tag "$IMAGE_LC:$SHORT" \
+            --tag "$IMAGE_LC:latest" \
+            --cache-from "type=gha,scope=${{ matrix.name }}" \
+            --cache-to "type=gha,mode=max,scope=${{ matrix.name }}" \
+            "${{ matrix.context }}"
+          echo "IMAGE_REF=$IMAGE_LC:$SHORT" >> "$GITHUB_ENV"
+
+  deploy:
+    name: Deploy ke VPS
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Siapkan SSH key
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          API_IMAGE: ${{ env.REGISTRY }}/${{ github.repository }}/api:${{ github.sha }}
+          WEB_IMAGE: ${{ env.REGISTRY }}/${{ github.repository }}/web:${{ github.sha }}
+        run: |
+          API_TAG="$(echo "$API_IMAGE" | tr '[:upper:]' '[:lower:]')"
+          WEB_TAG="$(echo "$WEB_IMAGE" | tr '[:upper:]' '[:lower:]')"
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" \
+            "cd '$DEPLOY_PATH/deployment' && \
+             API_IMAGE='$API_TAG' \
+             WEB_IMAGE='$WEB_TAG' \
+             ./scripts/deploy.sh --no-pull"
