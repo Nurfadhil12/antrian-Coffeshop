@@ -1,5 +1,10 @@
 import { Controller, Get, Logger } from '@nestjs/common';
 import { readFileSync } from 'node:fs';
+import {
+  DATABASE_URL_NAMES,
+  databaseUrlCandidates,
+  isVercelRuntime,
+} from './common/database-url';
 import { PrismaService } from './prisma/prisma.service';
 
 interface MigrateStatus {
@@ -78,6 +83,15 @@ export class AppController {
 
     const migrate = this.readMigrateStatus();
 
+    // Diagnostik environment: HANYA nama env var + boolean, tidak pernah nilainya.
+    // Kalau `dbSource` bernilai "placeholder", daftar ini yang menjawab "env var
+    // mana yang sebenarnya sampai ke proses ini?" tanpa perlu buka log container.
+    const candidates = databaseUrlCandidates();
+    const presentNames = Object.entries(candidates)
+      .filter(([, present]) => present)
+      .map(([name]) => name);
+    const onVercel = isVercelRuntime();
+
     return {
       status: db === 'up' && schema !== 'missing' ? 'ok' : 'degraded',
       db,
@@ -86,7 +100,19 @@ export class AppController {
       latencyMs: Date.now() - startedAt,
       dbSource: this.prisma.urlSource,
       dbHost: this.prisma.urlHost,
-      hint: this.healthHint(db, schema, migrate),
+      env: {
+        databaseUrlCandidates: candidates,
+        presentNames,
+        missingNames: DATABASE_URL_NAMES.filter((name) => !candidates[name]),
+        vercel: onVercel,
+        vercelEnv: process.env.VERCEL_ENV ?? null,
+        deployment: process.env.VERCEL_URL ?? null,
+      },
+      hint: this.healthHint(db, schema, migrate, {
+        urlMissing: this.prisma.urlMissing,
+        presentNames,
+        onVercel,
+      }),
       error,
       service: 'coffeeshop-api',
       time: new Date().toISOString(),
@@ -97,8 +123,20 @@ export class AppController {
     db: 'up' | 'down',
     schema: 'ok' | 'missing' | 'unknown',
     migrate: MigrateStatus | null,
+    ctx: { urlMissing: boolean; presentNames: string[]; onVercel: boolean },
   ): string | null {
-    if (this.prisma.urlMissing) {
+    if (ctx.urlMissing) {
+      const list = DATABASE_URL_NAMES.join(' / ');
+      if (ctx.onVercel) {
+        return (
+          `Tidak ada satu pun dari ${list} di environment deployment ini. ` +
+          'Urutan perbaikannya: (1) project → Storage → Create Database (Postgres/Neon) lalu ' +
+          'hubungkan ke project ini; (2) env var baru TIDAK berlaku untuk deployment lama — ' +
+          'lakukan Redeploy; (3) kalau database dibuat langsung di neon.tech (bukan lewat Storage), ' +
+          'tempel connection string-nya di Settings → Environment Variables dengan scope ' +
+          'Production, lalu Redeploy.'
+        );
+      }
       return (
         'DATABASE_URL belum ada di environment. Di Docker Compose: isi deployment/.env ' +
         '(lihat deployment/README.md). Di Vercel: pasang database dari Marketplace (mis. Neon) ' +
@@ -122,6 +160,13 @@ export class AppController {
           'migrasi dijalankan service api-migrate: docker compose logs api-migrate. Di Vercel ' +
           'Services tidak ada langkah itu, jadi jalankan sekali dari komputer: ' +
           'cd api && DATABASE_URL="<url-langsung>" npx prisma migrate deploy'
+        );
+      }
+      if (ctx.onVercel) {
+        return (
+          'Tabel belum ada di database ini. Vercel tidak punya langkah migrasi otomatis, jadi ' +
+          'jalankan sekali dari komputer: cd api && ' +
+          'DATABASE_URL="<url-langsung-dari-neon>" npx prisma migrate deploy'
         );
       }
       return 'Tabel belum ada. Jalankan migrasi: make migrate';

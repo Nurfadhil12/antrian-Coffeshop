@@ -27,12 +27,42 @@ export interface DatabaseUrlInfo {
 
 const PLACEHOLDER = 'postgresql://placeholder:placeholder@127.0.0.1:5432/placeholder';
 
-const NAMES: Array<Exclude<DatabaseUrlSource, 'placeholder'>> = [
+/**
+ * Nama env var yang dicoba, berurutan. Diekspor supaya pesan diagnostik bisa
+ * menyebut daftarnya tanpa menyalin ulang (dan tidak pernah menyebut nilainya).
+ */
+export const DATABASE_URL_NAMES: ReadonlyArray<Exclude<DatabaseUrlSource, 'placeholder'>> = [
   'DATABASE_URL',
   'POSTGRES_PRISMA_URL',
   'POSTGRES_URL',
   'DIRECT_URL',
 ];
+
+const NAMES = DATABASE_URL_NAMES;
+
+/**
+ * Nama env var kandidat → ada/tidak ada. HANYA nama dan boolean; nilainya tidak
+ * pernah dikembalikan, sehingga aman ditampilkan di /api/health.
+ *
+ * Gunanya saat deploy gagal: kalau `urlSource` bernilai "placeholder", pertanyaan
+ * berikutnya selalu "env var mana yang sebenarnya sampai ke container ini?" —
+ * fungsi ini menjawabnya dalam satu lihat, tanpa membuka log.
+ */
+export function databaseUrlCandidates(
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  for (const name of NAMES) {
+    const value = env[name];
+    out[name] = typeof value === 'string' && value.trim().length > 0;
+  }
+  return out;
+}
+
+/** Apakah proses ini berjalan di Vercel? Dipakai untuk memilih pesan perbaikan. */
+export function isVercelRuntime(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.VERCEL === '1' || typeof env.VERCEL_URL === 'string';
+}
 
 /** Info URL + asalnya. Tidak pernah melempar — dipakai saat boot aplikasi. */
 export function safeDatabaseUrl(env: NodeJS.ProcessEnv = process.env): DatabaseUrlInfo {

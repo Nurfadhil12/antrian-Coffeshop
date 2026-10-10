@@ -192,6 +192,15 @@ export interface HealthView {
   latencyMs: number;
   dbSource: string;
   dbHost: string;
+  /** Diagnostik environment — hanya NAMA env var, tidak pernah nilainya. */
+  env?: {
+    databaseUrlCandidates: Record<string, boolean>;
+    presentNames: string[];
+    missingNames: string[];
+    vercel: boolean;
+    vercelEnv: string | null;
+    deployment: string | null;
+  } | null;
   hint: string | null;
   error: string | null;
   service: string;
