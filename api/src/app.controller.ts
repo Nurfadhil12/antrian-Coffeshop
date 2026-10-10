@@ -99,6 +99,7 @@ export class AppController {
       latencyMs: Date.now() - startedAt,
       dbSource: this.prisma.urlSource,
       dbHost: this.prisma.urlHost,
+      dbName: this.prisma.urlDatabase,
       env: {
         databaseUrlCandidates: candidates,
         presentNames,

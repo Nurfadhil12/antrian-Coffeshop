@@ -23,6 +23,10 @@ export interface DatabaseUrlInfo {
   missing: boolean;
   /** host saja (tanpa kredensial) — untuk log/diagnostik */
   host: string;
+  /** Nama database dari path URL (tanpa kredensial). Dua database berbeda bisa
+   *  memakai host yang SAMA (satu project Neon, beberapa database), jadi host saja
+   *  tidak cukup untuk membedakan tujuan koneksi. */
+  database: string;
 }
 
 const PLACEHOLDER = 'postgresql://placeholder:placeholder@127.0.0.1:5432/placeholder';
@@ -69,10 +73,22 @@ export function safeDatabaseUrl(env: NodeJS.ProcessEnv = process.env): DatabaseU
   for (const name of NAMES) {
     const value = env[name];
     if (typeof value === 'string' && value.trim().length > 0) {
-      return { url: value, source: name, missing: false, host: hostOf(value) };
+      return {
+        url: value,
+        source: name,
+        missing: false,
+        host: hostOf(value),
+        database: databaseOf(value),
+      };
     }
   }
-  return { url: PLACEHOLDER, source: 'placeholder', missing: true, host: hostOf(PLACEHOLDER) };
+  return {
+    url: PLACEHOLDER,
+    source: 'placeholder',
+    missing: true,
+    host: hostOf(PLACEHOLDER),
+    database: databaseOf(PLACEHOLDER),
+  };
 }
 
 /** Versi tegas untuk script CLI (seed): gagal cepat dengan pesan jelas. */
@@ -91,6 +107,21 @@ export function resolveDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string
 export function hostOf(connectionString: string): string {
   try {
     return new URL(connectionString).host;
+  } catch {
+    return '(tidak bisa dibaca)';
+  }
+}
+
+/**
+ * Ambil NAMA DATABASE dari connection string (segmen path terakhir), tanpa
+ * kredensial dan tanpa parameter. Dipakai bersama host di diagnostik: satu project
+ * Neon bisa memuat beberapa database dengan host yang sama, jadi host saja tidak
+ * membedakan tujuan koneksi — dan itu pernah bikin bingung saat memeriksa deploy.
+ */
+export function databaseOf(connectionString: string): string {
+  try {
+    const name = new URL(connectionString).pathname.replace(/^\/+/, '');
+    return name || '(default)';
   } catch {
     return '(tidak bisa dibaca)';
   }

@@ -18,7 +18,7 @@
 import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
-import { hostOf, resolveDatabaseUrl } from '../src/common/database-url';
+import { databaseOf, hostOf, resolveDatabaseUrl } from '../src/common/database-url';
 import { APP_TABLES, probeSchema } from '../src/common/schema-probe';
 import { PrismaClient } from '../src/generated/prisma/client';
 
@@ -37,7 +37,9 @@ async function main() {
 
   try {
     console.log('== Pemeriksaan database ==');
-    console.log(`   host             : ${hostOf(url)} (kredensial tidak ditampilkan)`);
+    console.log(
+      `   tujuan           : ${hostOf(url)}/${databaseOf(url)} (kredensial tidak ditampilkan)`,
+    );
 
     let reachable = true;
     try {

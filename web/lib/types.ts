@@ -202,6 +202,9 @@ export interface HealthView {
   latencyMs: number;
   dbSource: string;
   dbHost: string;
+  /** Nama database (tanpa kredensial). Host saja tidak membedakan dua database
+   *  dalam satu project Neon. */
+  dbName?: string;
   /** Diagnostik environment — hanya NAMA env var, tidak pernah nilainya. */
   env?: {
     databaseUrlCandidates: Record<string, boolean>;

@@ -30,6 +30,9 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   readonly urlSource: DatabaseUrlSource;
   /** Host database (tanpa kredensial) untuk diagnostik. */
   readonly urlHost: string;
+  /** Nama database (tanpa kredensial) — host saja tidak membedakan dua database
+   *  dalam satu project Neon. */
+  readonly urlDatabase: string;
   readonly urlMissing: boolean;
 
   constructor() {
@@ -58,6 +61,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     this.pool = pool;
     this.urlSource = info.source;
     this.urlHost = info.host;
+    this.urlDatabase = info.database;
     this.urlMissing = info.missing;
 
     if (info.missing) {
@@ -67,7 +71,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
           'lalu jalankan: docker compose up -d',
       );
     } else {
-      this.logger.log(`Database dari ${info.source} → ${info.host}`);
+      this.logger.log(`Database dari ${info.source} → ${info.host}/${info.database}`);
     }
   }
 

@@ -71,7 +71,8 @@ export function ApiDiagnostics({
             ) : null}
             <dt>database</dt>
             <dd>
-              {health.dbSource} → {health.dbHost} ({health.latencyMs} ms)
+              {health.dbSource} → {health.dbHost}
+              {health.dbName ? `/${health.dbName}` : ''} ({health.latencyMs} ms)
             </dd>
             {envRow ? (
               <>
